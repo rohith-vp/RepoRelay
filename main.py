@@ -7,89 +7,118 @@ import random
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-# Setup
 pygame.init()
 WIDTH, HEIGHT = 800, 400
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 clock = pygame.time.Clock()
 GROUND_Y = 350
 
-# --- THE GESTURE ENGINE ---
+try:
+    dino_img = pygame.image.load('dino.png').convert_alpha()
+    dino_img = pygame.transform.scale(dino_img, (44, 48))
+    cactus_img = pygame.image.load('cactus.png').convert_alpha()
+    cactus_img = pygame.transform.scale(cactus_img, (30, 50))
+    use_graphics = True
+except:
+    use_graphics = False
+
 base_options = python.BaseOptions(model_asset_path='hand_landmarker.task')
-options = vision.HandLandmarkerOptions(base_options=base_options, num_hands=1)
+options = vision.HandLandmarkerOptions(
+    base_options=base_options, 
+    num_hands=1,
+    running_mode=vision.RunningMode.VIDEO
+)
 detector = vision.HandLandmarker.create_from_options(options)
 cap = cv2.VideoCapture(0)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-# --- THE GAME CLASSES ---
 class Dino:
     def __init__(self):
-        self.rect = pygame.Rect(50, GROUND_Y - 40, 40, 40)
+        self.rect = pygame.Rect(50, GROUND_Y - 48, 44, 48)
         self.vel_y = 0
+        self.gravity = 1.2
+        self.jump_power = -19
         self.is_jumping = False
 
     def jump(self):
         if not self.is_jumping:
-            self.vel_y = -18
+            self.vel_y = self.jump_power
             self.is_jumping = True
 
     def update(self):
         if self.is_jumping:
             self.rect.y += self.vel_y
-            self.vel_y += 1  # Gravity
-            if self.rect.y >= GROUND_Y - 40:
-                self.rect.y = GROUND_Y - 40
+            self.vel_y += self.gravity
+            if self.rect.y >= GROUND_Y - 48:
+                self.rect.y = GROUND_Y - 48
                 self.is_jumping = False
+                self.vel_y = 0
+
+    def draw(self):
+        if use_graphics:
+            screen.blit(dino_img, self.rect)
+        else:
+            pygame.draw.rect(screen, (46, 204, 113), self.rect, border_radius=5)
 
 class Cactus:
     def __init__(self):
-        self.rect = pygame.Rect(WIDTH, GROUND_Y - 40, 25, 40)
+        self.width = 30
+        self.height = 50
+        self.rect = pygame.Rect(WIDTH, GROUND_Y - self.height, self.width, self.height)
         self.speed = 8
 
     def update(self):
         self.rect.x -= self.speed
 
-# --- INITIALIZE OBJECTS ---
+    def draw(self):
+        if use_graphics:
+            screen.blit(cactus_img, self.rect)
+        else:
+            pygame.draw.rect(screen, (231, 76, 60), self.rect, border_radius=3)
+
 dino = Dino()
 obstacles = []
 score = 0
 font = pygame.font.SysFont("Arial", 24, bold=True)
 
 while True:
-    screen.fill((255, 255, 255))
+    screen.fill((240, 240, 240))
+    current_time = pygame.time.get_ticks()
     
-    # 1. Capture Camera & Detect Gesture
     success, frame = cap.read()
     if success:
         frame = cv2.flip(frame, 1)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        result = detector.detect(mp_image)
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        
+        result = detector.detect_for_video(mp_image, current_time)
         
         if result.hand_landmarks:
-            # Tip (8) vs PIP Joint (6)
             tip_y = result.hand_landmarks[0][8].y
             pip_y = result.hand_landmarks[0][6].y
             if tip_y < pip_y:
                 dino.jump()
 
-        # Optional: Display small camera preview
         preview = cv2.resize(frame, (120, 90))
-        preview = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
-        preview = np.rot90(preview)
-        cam_surf = pygame.surfarray.make_surface(preview)
+        preview_rgb = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
+        preview_rotated = np.transpose(preview_rgb, (1, 0, 2))
+        cam_surf = pygame.surfarray.make_surface(preview_rotated)
         screen.blit(cam_surf, (WIDTH - 130, 10))
 
-    # 2. Pygame Events
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
+            detector.close()
             cap.release()
             pygame.quit()
             sys.exit()
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_SPACE:
+                dino.jump()
 
-    # 3. Game Logic & Spawning
     dino.update()
     
-    # Spawn cactuses
-    if len(obstacles) == 0 or obstacles[-1].rect.x < WIDTH - random.randint(250, 450):
+    if len(obstacles) == 0 or obstacles[-1].rect.x < WIDTH - random.randint(300, 500):
         obstacles.append(Cactus())
 
     for ob in obstacles[:]:
@@ -98,20 +127,19 @@ while True:
             obstacles.remove(ob)
             score += 1
         
-        # Collision
         if dino.rect.colliderect(ob.rect):
-            print(f"GAME OVER! Score: {score}")
+            detector.close()
             cap.release()
             pygame.quit()
             sys.exit()
 
-    # 4. Render
-    pygame.draw.line(screen, (0, 0, 0), (0, GROUND_Y), (WIDTH, GROUND_Y), 2)
-    pygame.draw.rect(screen, (0, 200, 0), dino.rect)
-    for ob in obstacles:
-        pygame.draw.rect(screen, (200, 0, 0), ob.rect)
+    pygame.draw.rect(screen, (100, 100, 100), (0, GROUND_Y, WIDTH, 5))
+    dino.draw()
     
-    score_surf = font.render(f"Score: {score}", True, (0, 0, 0))
+    for ob in obstacles:
+        ob.draw()
+    
+    score_surf = font.render(f"SCORE: {score}", True, (50, 50, 50))
     screen.blit(score_surf, (20, 20))
 
     pygame.display.flip()
